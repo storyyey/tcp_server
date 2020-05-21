@@ -8,36 +8,45 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <pthread.h>
 
 #define SERVER_LISTEN_PORT (6666)
 #define SERVER_LISTEN_MAX 10
 
-#define SERVER_FD_INIT_VALUE		(-1)
-#define SERVER_NOLMAL				(0)
-#define SERVER_FAILED				(-11111)
-#define ERR_LISTEN_SOCKET 			(-1)
-#define ERR_BIND_LISTEN_SOCKET 		(-2)
-#define ERR_LISTEN_CLIENT			(-3)
-#define ERR_SERVER_EPOLL_INIT		(-4)
-#define ERR_SERVER_INIT				(-5)
-#define ERR_SERVER_RECV_LIST_INIT	(-6)
+#define SERVER_FD_INIT_VALUE			(-1)
+#define SERVER_NOLMAL					(0)
+#define SERVER_FAILED					(-11111)
+
+
+#define ERR_LISTEN_SOCKET 				(-1)
+#define ERR_BIND_LISTEN_SOCKET 			(-2)
+#define ERR_LISTEN_CLIENT				(-3)
+#define ERR_SERVER_EPOLL_INIT			(-4)
+#define ERR_SERVER_INIT					(-5)
+#define ERR_SERVER_RECV_LIST_INIT		(-6)
+#define ERR_SERVER_RECV_PTHREAD_CREATE 	(-7)
 
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #define container_of(ptr, type, member) ({\
 	 					const typeof( ((type *)0)->member ) *__mptr = (ptr);\
  						(type *)( (char *)__mptr - offsetof(type,member) );})
 
+
+
+
 typedef struct client {
 	int fd;
 	int first_connect_time;
 	int last_keepalive_time;
 	char ip_addr[32];
+	struct list *send_msg_list;
 }client;
 
 typedef struct server {
 	int listen_socket_fd;
 	int epoll_fd;
 	int epoll_recv_fd;
+	pthread_t recv_task;
 	void *send_list;
 	void *recv_list;
 }server;
@@ -55,6 +64,7 @@ typedef struct list {
 	void *node_sort;
 	void *node_free;
 	void *list_free;
+	void *data;
 }list;
 
 
@@ -150,9 +160,51 @@ WAIT_FINSH:
 	return ;
 }
 
-int server_recv_from_client_msg(struct server *server)
+
+int server_client_disconnect(struct server *server, struct client *client)
 {
-	
+	struct epoll_event event;
+
+	printf(" -------- Client %s disconnect(%d) success ------ \n", client->ip_addr, client->fd);
+
+	memset(&event, 0, sizeof(event));
+	event.data.fd = client->fd;
+
+	if (epoll_ctl(server->epoll_recv_fd, EPOLL_CTL_DEL, client->fd, &event) < 0) {
+		printf("delete client epoll ctl error \n");
+	}
+
+	close(client->fd);
+
+	server_del_client(server, client);
+
+	return 0;
+}
+int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, int nfd)
+{
+	struct client *client = NULL;
+	struct node *node = ((struct list*)(server->recv_list))->node;
+	char buff[1024] = {0};
+
+	if (node == NULL)
+		return 0;
+
+	for (int n = 0; n < nfd; n++) {
+		do {
+			client = (struct client *)node->data;
+			if (ev[n].data.fd == client->fd && ev[n].events & EPOLLIN) {
+				recv(client->fd, buff, sizeof(buff), 0);
+				printf("RECV(%s)Len(%ld): %s \n", client->ip_addr, strlen(buff), buff);
+				if (strlen(buff) == 0) {
+					server_client_disconnect(server, client);
+				}
+				node = ((struct list*)(server->recv_list))->node;
+				break;
+			}
+		
+			node = node->next;
+		}while (node != ((struct list*)(server->recv_list))->node);
+	}
 
 	return 0;
 }
@@ -312,8 +364,9 @@ int list_node_add(struct list *list, struct node *node)
 int list_node_del(struct list *list, struct node *node)
 {
 	if (list->node == node) {
-		if (list->node->next == list->node)
+		if (list->node->next == list->node) {
 			list->node = NULL;
+		}
 		else {
 			list->node = node->next;
 			node->next->prve = node->prve;
@@ -324,13 +377,13 @@ int list_node_del(struct list *list, struct node *node)
 		node->next->prve = node->prve;
 		node->prve->next = node->next;
 	}
-	
+
 	if (list->node_free) {
 		((node_free)list->node_free)(node);
 	}
-	
+
 	list_node_print(list);
-	
+
 	return 0;
 }
 
@@ -461,6 +514,38 @@ int server_recv_list_init(struct server *server)
 	return SERVER_NOLMAL;
 }
 
+void *server_recv_client_msg(void *arg)
+{
+	struct server *server = (struct server *)arg;
+	struct epoll_event event_s[1024];
+	int nfds = 0;
+	
+	if (server == NULL) 
+		pthread_exit(NULL);
+
+	for (; ;) {
+		nfds = epoll_wait(server->epoll_recv_fd, event_s, 1024, -1);
+		server_recv_from_client_msg(server, event_s, nfds);
+	}
+
+	return NULL;
+}
+
+int server_recv_task_init(struct server *server) 
+{
+	int ret = 0;
+
+	ret = pthread_create(&server->recv_task, NULL, server_recv_client_msg, (void*)server);
+	if (ret < 0) {
+		printf("Recv pthread creat error \n");
+		return ERR_SERVER_RECV_PTHREAD_CREATE;
+	}
+
+	pthread_detach(server->recv_task);
+
+	return SERVER_NOLMAL;
+}
+
 struct server * server_init()
 {
 	int ret = 0;
@@ -489,6 +574,11 @@ struct server * server_init()
 	}
 	
 	ret = server_recv_list_init(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;
+	}
+
+	ret = server_recv_task_init(server);
 	if (ret != SERVER_NOLMAL) {
 		goto SERVER_INIT_FAILE;
 	}
@@ -533,11 +623,10 @@ int server_exit(struct server *server)
 	return 0;
 }
 
-struct client *ctest[12] = {0};
-
-
 int server_add_client(struct server *server, struct client *client)
 {
+	struct epoll_event event;
+
 	if (client == NULL) {
 		printf("add client info error \n");
 		return -1;
@@ -553,6 +642,15 @@ int server_add_client(struct server *server, struct client *client)
 	}
 
 	list_node_add((list *)server->recv_list, node);
+
+	
+	memset(&event, 0, sizeof(event));
+	event.data.fd = client->fd;
+	event.events = EPOLLIN | EPOLLET;
+
+	if (epoll_ctl(server->epoll_recv_fd, EPOLL_CTL_ADD, client->fd, &event) < 0) {
+		printf("add client epoll ctl error \n");
+	}
 
 	return 0;
 }
@@ -580,7 +678,6 @@ int test_server()
 	server = server_init();
 
 	for (int n = 0; n < 12; n++) {
-		printf("-------------%d----------------- \n", __LINE__);
 		list = new_list();
 		if (list == NULL) {
 			printf("Init recv list error \n");
@@ -604,7 +701,7 @@ int test_server()
 			struct node *node = new_node(client);
 			list_node_add((struct list *)list, node);
 		}
-		printf("-------------------  %d ----------------- \n", n);
+
 		if (n == 0) {
 			list_del((struct list**)&server->recv_list, (struct list*)server->recv_list);
 		}
@@ -622,11 +719,12 @@ int main(int argc, char *argv[])
 {
 	struct server *server = NULL;
 	
-	test_server();
+	//test_server();
 	
-	//server = server_init();
-		
-	//server_wait_client_connect(server);
+	server = server_init();
+	
+	if (server)
+		server_wait_client_connect(server);
 
 	return 0;
 }

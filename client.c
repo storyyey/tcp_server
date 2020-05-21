@@ -63,9 +63,9 @@ int client_connect_server(char *server_addr)
 		printf("%s %d\n", __func__, __LINE__);
 		memset(buff, 0, sizeof(buff));
 		printf("%s %d\n", __func__, __LINE__);
-		recv(client_fd, buff, sizeof(buff), 0);
-		printf("%s %d\n", __func__, __LINE__);
-		printf("recv: %s \n", buff);
+		//recv(client_fd, buff, sizeof(buff), 0);
+		//printf("%s %d\n", __func__, __LINE__);
+		//printf("recv: %s \n", buff);
 
 	}
 	
