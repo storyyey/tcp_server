@@ -9,76 +9,8 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <pthread.h>
-
-#define SERVER_LISTEN_PORT (6666)
-#define SERVER_LISTEN_MAX 10
-
-#define SERVER_FD_INIT_VALUE			(-1)
-#define SERVER_NOLMAL					(0)
-#define SERVER_FAILED					(-11111)
-
-
-#define ERR_LISTEN_SOCKET 				(-1)
-#define ERR_BIND_LISTEN_SOCKET 			(-2)
-#define ERR_LISTEN_CLIENT				(-3)
-#define ERR_SERVER_EPOLL_INIT			(-4)
-#define ERR_SERVER_INIT					(-5)
-#define ERR_SERVER_RECV_LIST_INIT		(-6)
-#define ERR_SERVER_RECV_PTHREAD_CREATE 	(-7)
-
-#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
-#define container_of(ptr, type, member) ({\
-	 					const typeof( ((type *)0)->member ) *__mptr = (ptr);\
- 						(type *)( (char *)__mptr - offsetof(type,member) );})
-
-
-
-
-typedef struct client {
-	int fd;
-	int first_connect_time;
-	int last_keepalive_time;
-	char ip_addr[32];
-	struct list *send_msg_list;
-}client;
-
-typedef struct server {
-	int listen_socket_fd;
-	int epoll_fd;
-	int epoll_recv_fd;
-	pthread_t recv_task;
-	void *send_list;
-	void *recv_list;
-}server;
-
-typedef struct node {
-	struct node *prve;
-	struct node *next;
-	void *data;
-}node;
-
-typedef struct list {
-	struct list *prve;
-	struct list *next;
-	struct node *node;
-	void *node_sort;
-	void *node_free;
-	void *list_free;
-	void *data;
-}list;
-
-
-typedef struct node *(*node_sort)(struct node *, struct node *);
-typedef void (*node_free)(struct node *);
-typedef void (*list_free)(struct list *list);
-
-extern struct server * server_init();
-extern int server_exit(struct server *server);
-
-extern int server_add_client(struct server *server, struct client *client);
-extern int server_del_client(struct server *server, struct client *client);
-extern int list_node_del(struct list *list, struct node *node);
-
+#include "list.h"
+#include "server.h"
 
 int server_listen_socket_create(struct server *server)
 {
@@ -118,13 +50,9 @@ int server_listen_socket_create(struct server *server)
 void server_wait_client_connect(struct server *server)
 {
 	struct epoll_event event;
-	struct epoll_event event_s[1024];
-	struct sockaddr_in cliaddr;
-	int sin_size = sizeof(struct sockaddr_in);
-	char client_addr_p[32] = {0};
+	struct epoll_event event_s[8];
 
 	memset(&event, 0, sizeof(event));
-	memset(&cliaddr, 0, sizeof(cliaddr));
 
 	event.data.fd = server->listen_socket_fd;
 	event.events = EPOLLIN | EPOLLPRI | EPOLLET;
@@ -135,21 +63,11 @@ void server_wait_client_connect(struct server *server)
 	}
 	
 	while (1) {
-		int nfds = epoll_wait(server->epoll_fd, event_s, 1024, -1);
+		int nfds = epoll_wait(server->epoll_fd, event_s, 8, -1);
 		printf("%d of clients waiting to connect \n", nfds);
 		for (int n = 0; n < nfds; n++) {
 			if (event_s[n].data.fd == server->listen_socket_fd) {
-				int connfd = accept(server->listen_socket_fd, (struct sockaddr *)&cliaddr, &sin_size);
-				if (connfd > 0) {
-				printf(" -------- Client %s connect(%d) success ------ \n", inet_ntop(AF_INET,&cliaddr.sin_addr, client_addr_p, sizeof(client_addr_p)), connfd);
-					struct client *client = malloc(sizeof(struct client));
-					if (client) {
-						memset(client, 0, sizeof(struct client));
-						client->fd = connfd;
-						strcpy(client->ip_addr, client_addr_p);
-						server_add_client(server, client);
-					}
-				}
+				server_connect_client(server, server->listen_socket_fd);
 			}
 		}
 	}
@@ -160,7 +78,7 @@ WAIT_FINSH:
 	return ;
 }
 
-
+#if 0
 int server_client_disconnect(struct server *server, struct client *client)
 {
 	struct epoll_event event;
@@ -180,10 +98,11 @@ int server_client_disconnect(struct server *server, struct client *client)
 
 	return 0;
 }
+#endif
 int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, int nfd)
 {
 	struct client *client = NULL;
-	struct node *node = ((struct list*)(server->recv_list))->node;
+	struct node *node = ((struct list*)(server->client_list))->node;
 	char buff[1024] = {0};
 
 	if (node == NULL)
@@ -196,14 +115,14 @@ int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, i
 				recv(client->fd, buff, sizeof(buff), 0);
 				printf("RECV(%s)Len(%ld): %s \n", client->ip_addr, strlen(buff), buff);
 				if (strlen(buff) == 0) {
-					server_client_disconnect(server, client);
+					server_disconnect_client(server, client);
 				}
-				node = ((struct list*)(server->recv_list))->node;
+				node = ((struct list*)(server->client_list))->node;
 				break;
 			}
 		
 			node = node->next;
-		}while (node != ((struct list*)(server->recv_list))->node);
+		}while (node != ((struct list*)(server->client_list))->node);
 	}
 
 	return 0;
@@ -215,9 +134,6 @@ int server_send_to_client_msg(struct server *server)
 
 	return 0;
 }
-
-
-
 
 
 int server_epoll_init(struct server *server)
@@ -237,51 +153,9 @@ int server_epoll_init(struct server *server)
 	return SERVER_NOLMAL;
 }
 
-void list_node_print(struct list *list)
-{
-	struct node *node = list->node;
-	struct client *client= NULL;
 
-	if (node == NULL) {
-		printf("list node is null \n");
-		return ;
-	}
 
-	do {
-		printf("    NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
-		
-		client = (struct client *)node->data;
-		if (client) {
-			printf("    FD                    : %d \n", client->fd);
-			printf("    Client connect time   : %d \n", client->first_connect_time);
-			printf("    Last keepalive time   : %d \n", client->last_keepalive_time);	
-			printf("    IP address            : %s \n", client->ip_addr);
-		}
-	
-		node = node->next;
-	}while (node != list->node);
-
-}
-
-void list_print(struct list *list_head)
-{
-	struct list *lt = list_head;
-	int n = 0;
-
-	if (lt == NULL) {
-		printf("list is null \n");
-		return ;
-	}
-
-	do {
-		printf("LIST ADDRESS (%p) (%d) \n", lt, n++);
-		list_node_print(lt);
-		lt = lt->next;
-	}while(lt != list_head);
-
-}
-
-struct node* list_node_sort(struct node *node_head, struct node *node)
+struct node* server_client_node_sort(struct node *node_head, struct node *node)
 {
 	struct node *insert = NULL;
 	struct client *client = NULL;
@@ -307,7 +181,7 @@ struct node* list_node_sort(struct node *node_head, struct node *node)
 	return insert;
 }
 
-void list_node_destroy(struct node *node)
+void server_client_node_free(struct node *node)
 {
 	struct client *c = (struct client *)node->data;
 
@@ -317,7 +191,7 @@ void list_node_destroy(struct node *node)
 	free(node);
 }
 
-void list_destroy(struct list *list)
+void server_client_list_free(struct list *list)
 {
 	struct node *node = NULL;
 
@@ -328,188 +202,67 @@ void list_destroy(struct list *list)
 	free(list);
 }
 
-int list_node_add(struct list *list, struct node *node)
+void  server_client_node_print(struct list *list)
 {
-	struct node *nt = list->node;
-	struct node *insert = NULL;
+	struct node *node = list->node;
+	struct client *client= NULL;
 
-
-	if (list->node == NULL) {
-		list->node = node;
-		node->next = node;
-		node->prve = node;
-
-		list_node_print(list);
-		
-		return 0;
-	}
-
-	if (list->node_sort) {
-		insert = ((node_sort)list->node_sort)(list->node, node);
-	} 
-	else {
-		insert = list->node->prve;
-	}
-
-	node->next = insert->next;
-	node->prve = insert;
-	insert->next->prve = node;
-	insert->next = node;
-
-	list_node_print(list);
-		
-	return 0;
-}
-
-int list_node_del(struct list *list, struct node *node)
-{
-	if (list->node == node) {
-		if (list->node->next == list->node) {
-			list->node = NULL;
-		}
-		else {
-			list->node = node->next;
-			node->next->prve = node->prve;
-			node->prve->next = node->next;
-		}
-	}
-	else {
-		node->next->prve = node->prve;
-		node->prve->next = node->next;
-	}
-
-	if (list->node_free) {
-		((node_free)list->node_free)(node);
-	}
-
-	list_node_print(list);
-
-	return 0;
-}
-
-
-int list_add(struct list **list_head, struct list *list)
-{
-	printf("NEW LIST ADDR (%p)\n", list);
-
-
-	if (*list_head == NULL) {
-		*list_head = list;
-		list->next = list;
-		list->prve = list;
-		return 0;
-	}
-
-	list->next = (*list_head)->next;
-	list->prve = (*list_head);
-	(*list_head)->next->prve = list;
-	(*list_head)->next = list;
-
-	return 0;
-}
-
-
-
-int list_del(struct list **list_head, struct list *list)
-{
-	if ((*list_head) == list) {
-		if ((*list_head)->next == list)
-			(*list_head) = NULL;
-		else {
-			(*list_head) = list->next;
-			list->next->prve = list->prve;
-			list->prve->next = list->next;
-		}
-	}
-	else {
-		list->next->prve = list->prve;
-		list->prve->next = list->next;
-	}
-	
-	if (list->list_free) {
-		((list_free)list->list_free)(list);
-	}
-		
-	return 0;
-}
-
-
-
-struct node *new_node(void *data)
-{
-	struct node* node = malloc(sizeof(struct node));
 	if (node == NULL) {
-		printf("new node failed \n");
+		printf("list node is null \n");
+		return ;
 	}
-	else {
-		node->data = data;		
-	}
-
-	memset(node, 0, sizeof(node));
-	
-	printf("NEW NODE ADDR (%p) DATA (%p)\n", node, node->data);
-	
-	return node;
-}
-
-struct list* new_list()
-{
-	struct list* list = malloc(sizeof(struct list));
-	if (list == NULL) {
-		printf("new list failed \n");
-	}
-	
-	memset(list, 0, sizeof(list));
-	
-	return list;
-}
-
-struct node * data_find_node(struct node *node_head, void *data)
-{
-	struct node *nt = node_head;
-	struct node *node_find = NULL;
-
-	if (node_head == NULL || data == NULL)
-		return NULL;
 
 	do {
-		if (data == nt->data) { 
-			node_find = nt;
-			break;
+		printf("    NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
+		
+		client = (struct client *)node->data;
+		if (client) {
+			printf("    FD                    : %d \n", client->fd);
+			printf("    Client connect time   : %d \n", client->first_connect_time);
+			printf("    Last keepalive time   : %d \n", client->last_keepalive_time);	
+			printf("    IP address            : %s \n", client->ip_addr);
 		}
-		nt = nt->next;
-	}while (nt != node_head);
-
-	printf("FIND ADDRESS (%p) NEXT (%p) PRVE (%p) DATA (%p)\n", node_find, node_find->next, node_find->prve, node_find->data);
 	
-	return node_find;
+		node = node->next;
+	}while (node != list->node);
+
 }
 
-int server_list_destory_all(struct list **list_head)
+void server_client_list_print(struct list *list_head)
 {
-	struct list *tl = NULL;
-	
-	for (tl = *list_head; tl != NULL; tl = *list_head)
-		list_del(list_head, tl);
+	struct list *lt = list_head;
+	int n = 0;
 
-	*list_head = NULL;
+	if (lt == NULL) {
+		printf("list is null \n");
+		return ;
+	}
 
-	return 0;
+	do {
+		printf("LIST ADDRESS (%p) (%d) \n", lt, n++);
+		if (list_head->list_node_print) {
+			((list_node_print)list_head->list_node_print)(lt);
+		}
+		lt = lt->next;
+	}while(lt != list_head);
+
 }
 
-int server_recv_list_init(struct server *server)
+int server_client_list_init(struct server *server)
 {
-	struct list *recv_list = NULL;
-	recv_list = new_list();
-	if (recv_list == NULL) {
+	struct list *client_list = NULL;
+	client_list = new_list();
+	if (client_list == NULL) {
 		printf("Init recv list error \n");
 		return ERR_SERVER_RECV_LIST_INIT;
 	}
-	recv_list->node_sort = list_node_sort;
-	recv_list->node_free = list_node_destroy;
-	recv_list->list_free = list_destroy;
+	client_list->node_sort = server_client_node_sort;
+	client_list->node_free = server_client_node_free;
+	client_list->list_free = server_client_list_free;
+	client_list->list_node_print = server_client_node_print;
+	client_list->list_print = server_client_list_print;
 	
-	list_add((struct list**)&server->recv_list, recv_list);
+	list_add((struct list**)&server->client_list, client_list);
 
 	return SERVER_NOLMAL;
 }
@@ -546,6 +299,131 @@ int server_recv_task_init(struct server *server)
 	return SERVER_NOLMAL;
 }
 
+void *server_send_client_msg(void *arg)
+{
+	for (; ; ) {
+
+		
+	}
+
+	return NULL;
+}
+
+int srever_send_task_init(struct server *server)
+{
+	int ret = 0;
+
+	ret = pthread_create(&server->send_task, NULL, server_send_client_msg, (void*)server);
+	if (ret < 0) {
+		printf("Send pthread creat error \n");
+		return ERR_SERVER_RECV_PTHREAD_CREATE;
+	}
+
+	pthread_detach(server->send_task);
+
+	return SERVER_NOLMAL;
+}
+
+void client_msg_node_free(struct node *node)
+{
+	struct message *msg = (struct message *)node->data;
+
+	printf("    DELETE CLIENT MSG NODE (%p) \n", node);
+
+	if (msg->msg) {
+		free(msg->msg);
+	}
+
+	free(msg);
+	
+	free(node);
+}
+
+int  client_msg_list_free(struct list *list)
+{
+	struct node *node = NULL;
+
+	printf("DELETE LIST (%p) \n", list);
+	for (node = list->node; node != NULL; node = list->node)
+		list_node_del(list, node);
+
+	free(list);
+
+	return SERVER_NOLMAL;
+}
+
+void  client_msg_node_print(struct list *list)
+{
+	struct node *node = list->node;
+	struct message *msg = NULL;
+
+	if (node == NULL) {
+		printf("list node is null \n");
+		return ;
+	}
+
+	do {
+		printf("    NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
+		
+		msg = (struct message *)node->data;
+		if (msg) {
+
+		}
+	
+		node = node->next;
+	}while (node != list->node);
+
+}
+
+void client_msg_list_print(struct list *list_head)
+{
+	struct list *lt = list_head;
+	int n = 0;
+
+	if (lt == NULL) {
+		printf("list is null \n");
+		return ;
+	}
+
+	do {
+		printf("LIST ADDRESS (%p) (%d) \n", lt, n++);
+		if (list_head->list_node_print) {
+			((list_node_print)list_head->list_node_print)(lt);
+		}
+		lt = lt->next;
+	}while(lt != list_head);
+
+}
+
+int client_msg_list_init(struct list **list)
+{
+	struct list *msg_list = NULL;
+	
+	msg_list = new_list();
+	if (msg_list == NULL) {
+		printf("Init client send list error \n");
+		return ERR_SERVER_CLIENT_SEND_INIT;
+	}
+	
+	msg_list->node_free = client_msg_node_free;
+	msg_list->list_free = client_msg_list_free;
+	msg_list->list_node_print = client_msg_node_print;
+	msg_list->list_print = client_msg_list_print;
+
+	list_add(list, msg_list);
+
+	return SERVER_NOLMAL;
+}
+
+int client_msg_list_destory(struct list **list)
+{
+	if (*list != NULL) {
+		list_destory(list);
+	}
+
+	return SERVER_NOLMAL;
+}
+
 struct server * server_init()
 {
 	int ret = 0;
@@ -573,12 +451,17 @@ struct server * server_init()
 		goto SERVER_INIT_FAILE;	
 	}
 	
-	ret = server_recv_list_init(server);
+	ret = server_client_list_init(server);
 	if (ret != SERVER_NOLMAL) {
 		goto SERVER_INIT_FAILE;
 	}
 
 	ret = server_recv_task_init(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;
+	}
+
+	ret = srever_send_task_init(server);
 	if (ret != SERVER_NOLMAL) {
 		goto SERVER_INIT_FAILE;
 	}
@@ -614,8 +497,8 @@ int server_exit(struct server *server)
 	}
 	server->epoll_recv_fd = SERVER_FD_INIT_VALUE;
 
-	if (server->recv_list != NULL) {
-		server_list_destory_all((struct list**)&server->recv_list);
+	if (server->client_list != NULL) {
+		list_destory((struct list**)&server->client_list);
 	}
 	
 	free(server);
@@ -623,17 +506,39 @@ int server_exit(struct server *server)
 	return 0;
 }
 
-int server_add_client(struct server *server, struct client *client)
+int server_connect_client(struct server *server, int fd)
 {
 	struct epoll_event event;
+	int ret = 0;
+	int connect_fd = 0;
+	struct sockaddr_in cliaddr;
+	int sin_size = sizeof(struct sockaddr_in);
+	char client_addr_p[32] = {0};
 
+	connect_fd = accept(fd, (struct sockaddr *)&cliaddr, &sin_size);
+	if (!(connect_fd > 0)) {
+		printf("Accept connect client \n");
+		return 0;
+	}
+	
+	printf(" -------- Client %s connect(%d) success ------ \n", inet_ntop(AF_INET,&cliaddr.sin_addr, client_addr_p, sizeof(client_addr_p)), connect_fd);
+	struct client *client = malloc(sizeof(struct client));
 	if (client == NULL) {
 		printf("add client info error \n");
 		return -1;
 	}
-
+	
+	memset(client, 0, sizeof(struct client));
+	client->fd = connect_fd;
+	strcpy(client->ip_addr, client_addr_p);			
 	client->first_connect_time = time(NULL);
 	client->last_keepalive_time = time(NULL);
+
+	ret = client_msg_list_init(&client->msg_list); /*malloc client msg list*/
+	if (ret < 0) {
+		printf("Add new client error \n");
+		return 0;
+	}
 
 	struct node *node = new_node(client);
 	if (node == NULL) {
@@ -641,9 +546,8 @@ int server_add_client(struct server *server, struct client *client)
 		return -1;
 	}
 
-	list_node_add((list *)server->recv_list, node);
+	list_node_add((list *)server->client_list, node); /*malloc and add client */
 
-	
 	memset(&event, 0, sizeof(event));
 	event.data.fd = client->fd;
 	event.events = EPOLLIN | EPOLLET;
@@ -655,17 +559,37 @@ int server_add_client(struct server *server, struct client *client)
 	return 0;
 }
 
-int server_del_client(struct server *server, struct client *client)
+int server_disconnect_client(struct server *server, struct client *client)
 {
 	struct node *node = NULL;
+	struct epoll_event event;
+	int ret = 0;
 
-	node = data_find_node(((list *)server->recv_list)->node, (void *)client);
+	printf(" -------- Client %s disconnect(%d) success ------ \n", client->ip_addr, client->fd);
+
+	memset(&event, 0, sizeof(event));
+	event.data.fd = client->fd;
+
+	if (epoll_ctl(server->epoll_recv_fd, EPOLL_CTL_DEL, client->fd, &event) < 0) {
+		printf("delete client epoll ctl error \n");
+	}
+
+	close(client->fd);
+
+	ret = client_msg_list_destory(&client->msg_list);     /*free client send msg list*/
+	if (ret < 0) {
+		printf("Add new client error \n");
+		return 0;
+	}	
+
+	/* Delete client info */
+	node = data_find_node(((list *)server->client_list)->node, (void *)client);
 	if (node == NULL) {
 		printf("No node was found \n");
 		return -1;
 	}
 
-	list_node_del((list *)server->recv_list, node);
+	list_node_del((list *)server->client_list, node);   /*free client */
 
 	return 0;
 }
@@ -684,14 +608,15 @@ int test_server()
 			continue;
 		}
 		
+		list->node_sort = server_client_node_sort;
+		list->node_free = server_client_node_free;
+		list->list_free = server_client_list_free;
 
-		list->node_sort = list_node_sort;
-		list->node_free = list_node_destroy;
-		list->list_free = list_destroy;
+		list_add((struct list**)&server->client_list, list);
 
-		list_add((struct list**)&server->recv_list, list);
-
-		list_print((struct list*)server->recv_list);
+		if (list->list_print) {
+			((list_print)list->list_print)(server->client_list);
+		}
 		for (int k = 0; k < 12; k++) {
 			struct client *client = malloc(sizeof(struct client));
 			memset(client, 0, sizeof(struct client));
@@ -703,9 +628,11 @@ int test_server()
 		}
 
 		if (n == 0) {
-			list_del((struct list**)&server->recv_list, (struct list*)server->recv_list);
+			list_del((struct list**)&server->client_list, (struct list*)server->client_list);
 		}
-		list_print((struct list*)server->recv_list);
+		if (list->list_print) {
+			((list_print)list->list_print)(server->client_list);
+		}
 	}
 
 	//server_exit(server);
