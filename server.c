@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <pthread.h>
+#include <signal.h>
 #include "list.h"
 #include "server.h"
 
@@ -78,32 +79,11 @@ WAIT_FINSH:
 	return ;
 }
 
-#if 0
-int server_client_disconnect(struct server *server, struct client *client)
-{
-	struct epoll_event event;
-
-	printf(" -------- Client %s disconnect(%d) success ------ \n", client->ip_addr, client->fd);
-
-	memset(&event, 0, sizeof(event));
-	event.data.fd = client->fd;
-
-	if (epoll_ctl(server->epoll_recv_fd, EPOLL_CTL_DEL, client->fd, &event) < 0) {
-		printf("delete client epoll ctl error \n");
-	}
-
-	close(client->fd);
-
-	server_del_client(server, client);
-
-	return 0;
-}
-#endif
 int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, int nfd)
 {
 	struct client *client = NULL;
 	struct node *node = ((struct list*)(server->client_list))->node;
-	char buff[1024] = {0};
+	char buff[4096] = {0};
 
 	if (node == NULL)
 		return 0;
@@ -116,6 +96,9 @@ int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, i
 				printf("RECV(%s)Len(%ld): %s \n", client->ip_addr, strlen(buff), buff);
 				if (strlen(buff) == 0) {
 					server_disconnect_client(server, client);
+				}
+				else {
+					client_msg_list_add(client, buff, strlen(buff));
 				}
 				node = ((struct list*)(server->client_list))->node;
 				break;
@@ -149,6 +132,13 @@ int server_epoll_init(struct server *server)
 		printf("Recv epoll create faile \n");
 		return ERR_SERVER_EPOLL_INIT;
 	}
+
+	server->epoll_send_fd = epoll_create(1024);
+	if (server->epoll_send_fd < 0) {
+		printf("Send epoll create faile \n");
+		return ERR_SERVER_EPOLL_INIT;
+	}
+
 	
 	return SERVER_NOLMAL;
 }
@@ -183,10 +173,15 @@ struct node* server_client_node_sort(struct node *node_head, struct node *node)
 
 void server_client_node_free(struct node *node)
 {
-	struct client *c = (struct client *)node->data;
+	printf("    DELETE (client info) NODE (%p) \n", node);
 
-	printf("    DELETE NODE (%p) \n", node);
-	free(c);
+	struct client *client = (struct client *)node->data;
+
+	close(client->fd);
+	
+	client_msg_list_destory((struct list **)&client->msg_list);
+
+	free(client);
 	
 	free(node);
 }
@@ -195,7 +190,7 @@ void server_client_list_free(struct list *list)
 {
 	struct node *node = NULL;
 
-	printf("DELETE LIST (%p) \n", list);
+	printf("DELETE (client info) LIST (%p) \n", list);
 	for (node = list->node; node != NULL; node = list->node)
 		list_node_del(list, node);
 
@@ -213,7 +208,7 @@ void  server_client_node_print(struct list *list)
 	}
 
 	do {
-		printf("    NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
+		printf("    (client info) NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
 		
 		client = (struct client *)node->data;
 		if (client) {
@@ -239,7 +234,7 @@ void server_client_list_print(struct list *list_head)
 	}
 
 	do {
-		printf("LIST ADDRESS (%p) (%d) \n", lt, n++);
+		printf("(client info) LIST ADDRESS (%p) (%d) \n", lt, n++);
 		if (list_head->list_node_print) {
 			((list_node_print)list_head->list_node_print)(lt);
 		}
@@ -251,6 +246,7 @@ void server_client_list_print(struct list *list_head)
 int server_client_list_init(struct server *server)
 {
 	struct list *client_list = NULL;
+	
 	client_list = new_list();
 	if (client_list == NULL) {
 		printf("Init recv list error \n");
@@ -328,7 +324,7 @@ void client_msg_node_free(struct node *node)
 {
 	struct message *msg = (struct message *)node->data;
 
-	printf("    DELETE CLIENT MSG NODE (%p) \n", node);
+	printf("    DELETE (client message) NODE (%p) \n", node);
 
 	if (msg->msg) {
 		free(msg->msg);
@@ -343,7 +339,7 @@ int  client_msg_list_free(struct list *list)
 {
 	struct node *node = NULL;
 
-	printf("DELETE LIST (%p) \n", list);
+	printf("DELETE (client message) LIST (%p) \n", list);
 	for (node = list->node; node != NULL; node = list->node)
 		list_node_del(list, node);
 
@@ -363,11 +359,13 @@ void  client_msg_node_print(struct list *list)
 	}
 
 	do {
-		printf("    NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
+		printf("    (client message) NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
 		
 		msg = (struct message *)node->data;
 		if (msg) {
-
+			printf("MSG(%d): %s \n", msg->len, msg->msg);
+			printf("MSG TYPE；%d \n", msg->type);
+			printf("MSG priority: %d \n", msg->priority);
 		}
 	
 		node = node->next;
@@ -386,7 +384,7 @@ void client_msg_list_print(struct list *list_head)
 	}
 
 	do {
-		printf("LIST ADDRESS (%p) (%d) \n", lt, n++);
+		printf("(client message) LIST ADDRESS (%p) (%d) \n", lt, n++);
 		if (list_head->list_node_print) {
 			((list_node_print)list_head->list_node_print)(lt);
 		}
@@ -424,85 +422,32 @@ int client_msg_list_destory(struct list **list)
 	return SERVER_NOLMAL;
 }
 
-struct server * server_init()
+int client_msg_list_add(struct client *client, char *str, int str_len)
 {
-	int ret = 0;
-	struct server *server = NULL;
-	
-	printf("============== SERVER INIT ============= \n");
-	
-	server = malloc(sizeof(struct server));
-	if (server == NULL) {
-		printf("Sever init failed \n");
-		goto SERVER_INIT_FAILE;
-	}
-	memset(server, 0, sizeof(server));
+	struct message *msg = NULL;
+	char *msg_str = NULL;
 
-	server->epoll_fd = SERVER_FD_INIT_VALUE;
-	server->epoll_recv_fd = SERVER_FD_INIT_VALUE;
-	ret = server_epoll_init(server);
-	if (ret != SERVER_NOLMAL) {
-		goto SERVER_INIT_FAILE;
-	}
-	
-	server->listen_socket_fd = SERVER_FD_INIT_VALUE;
-	ret = server_listen_socket_create(server);
-	if (ret != SERVER_NOLMAL) {
-		goto SERVER_INIT_FAILE;	
-	}
-	
-	ret = server_client_list_init(server);
-	if (ret != SERVER_NOLMAL) {
-		goto SERVER_INIT_FAILE;
-	}
+	msg = malloc(sizeof(struct message));
+	if (msg == NULL)
+		return 0;
+	memset(msg, 0, sizeof(struct message));
 
-	ret = server_recv_task_init(server);
-	if (ret != SERVER_NOLMAL) {
-		goto SERVER_INIT_FAILE;
-	}
-
-	ret = srever_send_task_init(server);
-	if (ret != SERVER_NOLMAL) {
-		goto SERVER_INIT_FAILE;
-	}
-	
-	return server;
-	
-SERVER_INIT_FAILE:
-	server_exit(server);
-
-	return NULL;
-}
-
-int server_exit(struct server *server)
-{
-	printf("============== SERVER EXIT ============= \n");
-
-	if (server == NULL)
+	msg_str = malloc(str_len);
+	if (msg_str == NULL)
 		return 0;
 
-	if (server->listen_socket_fd > 0) {
-		close(server->listen_socket_fd);
-	}
-	server->listen_socket_fd = SERVER_FD_INIT_VALUE;
-
-
-	if (server->epoll_fd > 0) {
-		close(server->epoll_fd );
-	}
-	server->epoll_fd = SERVER_FD_INIT_VALUE;
-
-	if (server->epoll_recv_fd > 0) {
-		close(server->epoll_recv_fd);
-	}
-	server->epoll_recv_fd = SERVER_FD_INIT_VALUE;
-
-	if (server->client_list != NULL) {
-		list_destory((struct list**)&server->client_list);
-	}
+	memcpy(msg_str, str, str_len);
+	msg->msg = msg_str;
+	msg->len = str_len;
 	
-	free(server);
-	
+	struct node *node = new_node(msg);
+	if (node == NULL) {
+		printf("Failed to add a new node \n");
+		return -1;
+	}
+
+	list_node_add((list *)client->msg_list, node);
+
 	return 0;
 }
 
@@ -539,15 +484,7 @@ int server_connect_client(struct server *server, int fd)
 		printf("Add new client error \n");
 		return 0;
 	}
-
-	struct node *node = new_node(client);
-	if (node == NULL) {
-		printf("Failed to add a new node \n");
-		return -1;
-	}
-
-	list_node_add((list *)server->client_list, node); /*malloc and add client */
-
+	
 	memset(&event, 0, sizeof(event));
 	event.data.fd = client->fd;
 	event.events = EPOLLIN | EPOLLET;
@@ -555,6 +492,14 @@ int server_connect_client(struct server *server, int fd)
 	if (epoll_ctl(server->epoll_recv_fd, EPOLL_CTL_ADD, client->fd, &event) < 0) {
 		printf("add client epoll ctl error \n");
 	}
+	
+	struct node *node = new_node(client);
+	if (node == NULL) {
+		printf("Failed to add a new node \n");
+		return -1;
+	}
+
+	list_node_add((list *)server->client_list, node); /*malloc and add client */
 
 	return 0;
 }
@@ -642,13 +587,107 @@ int test_server()
 	return 0;
 }
 
+struct server * server_init()
+{
+	int ret = 0;
+	struct server *server = NULL;
+	
+	printf("============== SERVER INIT ============= \n");
+	
+	server = malloc(sizeof(struct server));
+	if (server == NULL) {
+		printf("Sever init failed \n");
+		goto SERVER_INIT_FAILE;
+	}
+	memset(server, 0, sizeof(server));
+
+	server->epoll_fd = SERVER_FD_INIT_VALUE;
+	server->epoll_recv_fd = SERVER_FD_INIT_VALUE;
+	ret = server_epoll_init(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;
+	}
+	
+	server->listen_socket_fd = SERVER_FD_INIT_VALUE;
+	ret = server_listen_socket_create(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;	
+	}
+	
+	ret = server_client_list_init(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;
+	}
+
+	ret = server_recv_task_init(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;
+	}
+
+	ret = srever_send_task_init(server);
+	if (ret != SERVER_NOLMAL) {
+		goto SERVER_INIT_FAILE;
+	}
+	
+	return server;
+	
+SERVER_INIT_FAILE:
+	server_exit(server);
+
+	return NULL;
+}
+
+int server_exit(struct server *server)
+{
+	printf("============== SERVER EXIT ============= \n");
+
+	if (server == NULL)
+		return 0;
+
+	if (server->listen_socket_fd > 0) {
+		close(server->listen_socket_fd);
+	}
+	server->listen_socket_fd = SERVER_FD_INIT_VALUE;
+
+
+	if (server->epoll_fd > 0) {
+		close(server->epoll_fd );
+	}
+	server->epoll_fd = SERVER_FD_INIT_VALUE;
+
+	if (server->epoll_recv_fd > 0) {
+		close(server->epoll_recv_fd);
+	}
+	server->epoll_recv_fd = SERVER_FD_INIT_VALUE;
+
+	if (server->epoll_send_fd > 0) {
+		close(server->epoll_send_fd);
+	}
+	server->epoll_send_fd = SERVER_FD_INIT_VALUE;
+
+	if (server->client_list != NULL) {
+		list_destory((struct list**)&server->client_list);
+	}
+	
+	free(server);
+	
+	return 0;
+}
+struct server *gserver;
+void signal_server_exit()
+{ 
+	server_exit(gserver);
+}
+
 int main(int argc, char *argv[])
 {
+	signal(SIGPIPE, signal_server_exit);
+
 	struct server *server = NULL;
 	
 	//test_server();
 	
-	server = server_init();
+	gserver = server = server_init();
 	
 	if (server)
 		server_wait_client_connect(server);

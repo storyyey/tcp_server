@@ -33,6 +33,7 @@ enum message_type {
 	MSG_TYPE_UNICAST,
 	MSG_TYPE_BROADCAST,
 	MSG_TYPE_MULTICAST,
+	MSG_TYPE_KEEPALIVE,
 };
 
 typedef struct message {
@@ -56,9 +57,10 @@ typedef struct server {
 	int listen_socket_fd;
 	int epoll_fd;
 	int epoll_recv_fd;
+	int epoll_send_fd;
 	pthread_t recv_task;
 	pthread_t send_task;
-	void *send_list;
+	void *trans_list;
 	void *client_list;
 }server;
 
@@ -82,6 +84,11 @@ extern  struct server * server_init();
 extern int server_exit(struct server *server);
 extern int server_add_client(struct server *server, struct client *client);
 extern int server_del_client(struct server *server, struct client *client);
+extern int client_msg_list_destory(struct list **list);
+
+
+
+extern int client_msg_list_add(struct client *client, char *str, int str_len);
 
 #endif /*__SERVER_H__*/
 
