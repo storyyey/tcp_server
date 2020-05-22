@@ -52,6 +52,7 @@ void server_wait_client_connect(struct server *server)
 {
 	struct epoll_event event;
 	struct epoll_event event_s[8];
+	int nfds = 0;
 
 	memset(&event, 0, sizeof(event));
 
@@ -63,11 +64,11 @@ void server_wait_client_connect(struct server *server)
 		goto WAIT_FINSH;
 	}
 	
-	while (1) {
-		int nfds = epoll_wait(server->epoll_fd, event_s, 8, -1);
+	for (; ; ) {
+		nfds = epoll_wait(server->epoll_fd, event_s, sizeof(event_s) / sizeof(struct epoll_event), -1);
 		printf("%d of clients waiting to connect \n", nfds);
 		for (int n = 0; n < nfds; n++) {
-			if (event_s[n].data.fd == server->listen_socket_fd) {
+			if (event_s[n].data.fd == server->listen_socket_fd && event_s[n].data.fd & EPOLLIN) {
 				server_connect_client(server, server->listen_socket_fd);
 			}
 		}
@@ -273,7 +274,7 @@ void *server_recv_client_msg(void *arg)
 		pthread_exit(NULL);
 
 	for (; ;) {
-		nfds = epoll_wait(server->epoll_recv_fd, event_s, 1024, -1);
+		nfds = epoll_wait(server->epoll_recv_fd, event_s, sizeof(event_s) / sizeof(struct epoll_event), -1);
 		server_recv_from_client_msg(server, event_s, nfds);
 	}
 
@@ -448,6 +449,8 @@ int client_msg_list_add(struct client *client, char *str, int str_len)
 
 	list_node_add((list *)client->msg_list, node);
 
+	client->wait_forward_msg++;
+
 	return 0;
 }
 
@@ -528,7 +531,7 @@ int server_disconnect_client(struct server *server, struct client *client)
 	}	
 
 	/* Delete client info */
-	node = data_find_node(((list *)server->client_list)->node, (void *)client);
+	node = node_search_by_data(((list *)server->client_list)->node, (void *)client);
 	if (node == NULL) {
 		printf("No node was found \n");
 		return -1;

@@ -161,7 +161,7 @@ struct list* new_list()
 	return list;
 }
 
-struct node * data_find_node(struct node *node_head, void *data)
+struct node * node_search_by_data(struct node *node_head, void *data)
 {
 	struct node *nt = node_head;
 	struct node *node_find = NULL;

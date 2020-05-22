@@ -34,7 +34,7 @@ extern int list_add(struct list **list_head, struct list *list);
 extern int list_del(struct list **list_head, struct list *list);
 extern struct node *new_node(void *data);
 extern struct list* new_list();
-extern struct node * data_find_node(struct node *node_head, void *data);
+extern struct node * node_search_by_data(struct node *node_head, void *data);
 extern int list_destory(struct list **list_head);
 #endif /* __LIST_h__ */
 

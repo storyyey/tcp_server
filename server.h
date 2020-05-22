@@ -41,6 +41,7 @@ typedef struct message {
 	int len;
 	enum message_type type;	
 	int priority;
+	struct client *src_client;
 }message;
 
 typedef struct client {
@@ -49,7 +50,7 @@ typedef struct client {
 	int first_connect_time;
 	int last_keepalive_time;
 	char ip_addr[32];
-	int msg_num;
+	int wait_forward_msg;
 	struct list *msg_list;
 }client;
 
