@@ -209,6 +209,7 @@ struct node* server_client_node_sort(struct node **node_head, struct node *node)
 		return *node_head;
 
 	client = (struct client *)node->data;
+	
 	LIST_NODE_LOOKUP(*node_head, insert) {
 		ct = (struct client *)insert->data;
 		if (client->fd < ct->fd) { 
@@ -630,7 +631,7 @@ int server_disconnect_client(struct server *server, struct client *client)
 
 	ret = client_msg_list_destory(&client->msg_list);     /*free client send msg list*/
 	if (ret < 0) {
-		printf("Add new client error \n");
+		printf("Delete client error \n");
 		return 0;
 	}	
 
