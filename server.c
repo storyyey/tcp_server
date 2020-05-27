@@ -249,9 +249,16 @@ void server_client_list_free(struct list *list)
 
 	printf("DELETE (client info) LIST (%p) \n", list);
 	for (node = list->node; node != NULL; node = list->node)
-		list_node_del(list, node);
+		list_single_node_del(list, node);
 
 	_free_(list, sizeof(struct list));
+}
+
+int server_client_list_destory(struct list **list)
+{
+	list_all_del(list);
+
+	return SERVER_NOLMAL;
 }
 
 void  server_client_node_print(struct list *list)
@@ -310,7 +317,7 @@ int server_client_list_init(struct server *server)
 	client_list->list_node_print = server_client_node_print;
 	client_list->list_print = server_client_list_print;
 	
-	list_add((struct list**)&server->client_list, client_list);
+	list_single_add((struct list**)&server->client_list, client_list);
 
 	return SERVER_NOLMAL;
 }
@@ -445,7 +452,7 @@ int  client_msg_list_free(struct list *list)
 
 	printf("DELETE (client message) LIST (%p) \n", list);
 	for (node = list->node; node != NULL; node = list->node)
-		list_node_del(list, node);
+		list_single_node_del(list, node);
 
 	_free_(list, sizeof(struct list));
 
@@ -508,17 +515,15 @@ int client_msg_list_init(struct list **list)
 	msg_list->list_node_print = client_msg_node_print;
 	msg_list->list_print = client_msg_list_print;
 
-	list_add(list, msg_list);
+	list_single_add(list, msg_list);
 
 	return SERVER_NOLMAL;
 }
 
 int client_msg_list_destory(struct list **list)
 {
-	if (*list != NULL) {
-		list_destory(list);
-	}
-
+	list_all_del(list);
+	
 	return SERVER_NOLMAL;
 }
 
@@ -546,7 +551,7 @@ int client_msg_list_add(struct client *client, char *str, int str_len)
 		return -1;
 	}
 
-	list_node_add((list *)client->msg_list, node);
+	list_single_node_add((list *)client->msg_list, node);
 
 	client->wait_forward_msg++;
 
@@ -601,7 +606,7 @@ int server_connect_client(struct server *server, int fd)
 		return -1;
 	}
 
-	list_node_add((list *)server->client_list, node); /*malloc and add client */
+	list_single_node_add((list *)server->client_list, node); /*malloc and add client */
 
 	return 0;
 }
@@ -636,7 +641,7 @@ int server_disconnect_client(struct server *server, struct client *client)
 		return -1;
 	}
 
-	list_node_del((list *)server->client_list, node);   /*free client */
+	list_single_node_del((list *)server->client_list, node);   /*free client */
 
 	return 0;
 }
@@ -659,7 +664,7 @@ int test_server()
 		list->node_free = server_client_node_free;
 		list->list_free = server_client_list_free;
 
-		list_add((struct list**)&server->client_list, list);
+		list_single_add((struct list**)&server->client_list, list);
 
 		if (list->list_print) {
 			((list_print)list->list_print)(server->client_list);
@@ -671,11 +676,11 @@ int test_server()
 			client->last_keepalive_time = time(NULL);
 			client->fd = k + 10;
 			struct node *node = new_node(client);
-			list_node_add((struct list *)list, node);
+			list_single_node_add((struct list *)list, node);
 		}
 
 		if (n == 0) {
-			list_del((struct list**)&server->client_list, (struct list*)server->client_list);
+			list_single_del((struct list**)&server->client_list, (struct list*)server->client_list);
 		}
 		if (list->list_print) {
 			((list_print)list->list_print)(server->client_list);
@@ -768,7 +773,7 @@ int server_exit(struct server *server)
 	server->epoll_send_fd = SERVER_FD_INIT_VALUE;
 
 	if (server->client_list != NULL) {
-		list_destory((struct list**)&server->client_list);
+		server_client_list_destory((struct list**)&server->client_list);
 	}
 
 	if (server->listen_event_s) {

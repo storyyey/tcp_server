@@ -81,7 +81,7 @@ void malloc_print()
 #endif
 }
 
-int list_node_add(struct list *list, struct node *node)
+int list_single_node_add(struct list *list, struct node *node)
 {
 	struct node *nt = list->node;
 
@@ -117,7 +117,7 @@ int list_node_add(struct list *list, struct node *node)
 	return 0;
 }
 
-int list_node_del(struct list *list, struct node *node)
+int list_single_node_del(struct list *list, struct node *node)
 {
 	if (list->node == node) {
 		if (list->node->next == list->node) {
@@ -148,7 +148,7 @@ int list_node_del(struct list *list, struct node *node)
 }
 
 
-int list_add(struct list **list_head, struct list *list)
+int list_single_add(struct list **list_head, struct list *list)
 {
 	printf("NEW LIST ADDR (%p)\n", list);
 
@@ -169,7 +169,7 @@ int list_add(struct list **list_head, struct list *list)
 }
 
 
-int list_del(struct list **list_head, struct list *list)
+int list_single_del(struct list **list_head, struct list *list)
 {
 	if ((*list_head) == list) {
 		if ((*list_head)->next == list)
@@ -192,17 +192,18 @@ int list_del(struct list **list_head, struct list *list)
 	return 0;
 }
 
-int list_destory(struct list **list_head)
+int list_all_del(struct list **list_head)
 {
 	struct list *tl = NULL;
 	
 	for (tl = *list_head; tl != NULL; tl = *list_head)
-		list_del(list_head, tl);
+		list_single_del(list_head, tl);
 
 	*list_head = NULL;
 
 	return 0;
 }
+
 
 
 struct node *new_node(void *data)
