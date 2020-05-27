@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <time.h>
 
 #define SERVER_LISTEN_PORT (6666)
 #define SERVER_LISTEN_MAX 10
@@ -54,6 +55,9 @@ int client_connect_server(char *server_addr)
 
 	while (1) {
 		scanf("%s", buff);
+
+		//snprintf(buff, sizeof(buff), "%s%d\n", "client message send test ", (int)time(NULL));;
+		
 		if (strcmp("quit", buff) == 0)
 			break;
 		printf("send: %s \n", buff);

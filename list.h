@@ -21,7 +21,7 @@ typedef struct list {
 	int node_num;
 }list;
 
-typedef struct node *(*node_sort)(struct node *, struct node *);
+typedef struct node *(*node_sort)(struct node **, struct node *);
 typedef void (*node_free)(struct node *);
 typedef void (*list_free)(struct list *);
 typedef void  (*list_node_print)(struct list *);
@@ -36,6 +36,19 @@ extern struct node *new_node(void *data);
 extern struct list* new_list();
 extern struct node * node_search_by_data(struct node *node_head, void *data);
 extern int list_destory(struct list **list_head);
+
+
+extern void malloc_print();
+extern void *_free_(void *p, int size) ;
+extern void *_malloc_(int size, const char *des) ;
+
+
+#define LIST_NODE_LOOKUP(head, n) \
+			for (struct node *nt = NULL, *node1 = (head); n = node1, node1 != nt; nt = (head), node1 = node1->next)
+				
+#define LIST_LOOKUP(head, n) \
+			for (struct list *nt = NULL, *node1 = (head); n = node1, node1 != nt; nt = (head), node1 = node1->next)
+
 #endif /* __LIST_h__ */
 
 

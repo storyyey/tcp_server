@@ -34,6 +34,7 @@ enum message_type {
 	MSG_TYPE_BROADCAST,
 	MSG_TYPE_MULTICAST,
 	MSG_TYPE_KEEPALIVE,
+	MSG_TYPE_FILE,
 };
 
 typedef struct message {
@@ -57,10 +58,16 @@ typedef struct client {
 typedef struct server {
 	int listen_socket_fd;
 	int epoll_fd;
-	int epoll_recv_fd;
-	int epoll_send_fd;
+	struct epoll_event *listen_event_s;
+	int listen_event_size;
 	pthread_t recv_task;
-	pthread_t send_task;
+	int epoll_recv_fd;
+	struct epoll_event *recv_event_s;
+	int recv_event_size;
+	pthread_t send_task;	
+	int epoll_send_fd;
+	struct epoll_event *send_event_s;
+	int send_event_size;
 	void *trans_list;
 	void *client_list;
 }server;
@@ -72,10 +79,10 @@ extern int server_connect_client(struct server *server, int fd);
 extern int server_disconnect_client(struct server *server, struct client *client);
 extern int server_listen_socket_create(struct server *server);
 extern void server_wait_client_connect(struct server *server);
-extern int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, int nfd);
+extern int server_recv_from_client_msg(struct server *server, struct epoll_event **ev, int nfd);
 extern int server_epoll_init(struct server *server);
 extern int server_list_destory(struct list **list_head);
-extern struct node* server_client_node_sort(struct node *node_head, struct node *node);
+extern struct node* server_client_node_sort(struct node **node_head, struct node *node);
 extern void server_client_node_free(struct node *node);
 extern void server_client_list_free(struct list *list);
 extern int server_client_list_init(struct server *server);

@@ -51,7 +51,8 @@ int server_listen_socket_create(struct server *server)
 void server_wait_client_connect(struct server *server)
 {
 	struct epoll_event event;
-	struct epoll_event event_s[8];
+	struct epoll_event *event_s = server->listen_event_s;
+	int event_size = server->listen_event_size;
 	int nfds = 0;
 
 	memset(&event, 0, sizeof(event));
@@ -65,10 +66,9 @@ void server_wait_client_connect(struct server *server)
 	}
 	
 	for (; ; ) {
-		nfds = epoll_wait(server->epoll_fd, event_s, sizeof(event_s) / sizeof(struct epoll_event), -1);
-		printf("%d of clients waiting to connect \n", nfds);
+		nfds = epoll_wait(server->epoll_fd, event_s, event_size, -1);
 		for (int n = 0; n < nfds; n++) {
-			if (event_s[n].data.fd == server->listen_socket_fd && event_s[n].data.fd & EPOLLIN) {
+			if (event_s[n].data.fd == server->listen_socket_fd && event_s[n].data.fd & EPOLLPRI) {				
 				server_connect_client(server, server->listen_socket_fd);
 			}
 		}
@@ -80,33 +80,66 @@ WAIT_FINSH:
 	return ;
 }
 
-int server_recv_from_client_msg(struct server *server, struct epoll_event *ev, int nfd)
+
+int server_recv_msg(int fd, struct message **msg)
+{
+#define RECV_MSG_LEN 2048
+
+	char buff[RECV_MSG_LEN] = {0};
+	char **recv_[4096] = {0};
+	int recv_n = 0;
+	int recv_len = 0;
+	int msg_len = 0;
+
+	*msg = _malloc_(sizeof(struct message), "Client message");
+	if (*msg == NULL)
+		return -1;
+
+	do {
+		recv_len = recv(fd, buff, sizeof(buff), 0);
+		if (recv_len < 0)
+			break;
+	
+		*recv_[recv_n] = _malloc_(recv_len, "RECV message");
+		if (*recv_[recv_n]) {
+			memcpy(*recv_[recv_n], buff, recv_len);
+			msg_len += recv_len;
+			recv_n++;
+		}
+	}while (recv_len >= sizeof(buff));
+	
+	(*msg)->len = msg_len;
+
+	return 0;
+};
+
+int server_recv_from_client_msg(struct server *server, struct epoll_event **ep, int nfd)
 {
 	struct client *client = NULL;
-	struct node *node = ((struct list*)(server->client_list))->node;
+	struct node *node_head = ((struct list*)(server->client_list))->node;
+	struct node *node = node_head;
 	char buff[4096] = {0};
+	int epn = 0;
 
 	if (node == NULL)
 		return 0;
 
-	for (int n = 0; n < nfd; n++) {
-		do {
-			client = (struct client *)node->data;
-			if (ev[n].data.fd == client->fd && ev[n].events & EPOLLIN) {
-				recv(client->fd, buff, sizeof(buff), 0);
-				printf("RECV(%s)Len(%ld): %s \n", client->ip_addr, strlen(buff), buff);
-				if (strlen(buff) == 0) {
-					server_disconnect_client(server, client);
-				}
-				else {
-					client_msg_list_add(client, buff, strlen(buff));
-				}
-				node = ((struct list*)(server->client_list))->node;
-				break;
+	LIST_NODE_LOOKUP(node_head, node) {
+		if (epn >= nfd) 
+			break;
+
+		client = (struct client *)node->data;
+		if (ep[epn]->data.fd == client->fd && ep[epn]->events & EPOLLIN) {
+			recv(client->fd, buff, sizeof(buff), 0);
+			printf("RECV(%s) Len(%ld): %s \n", client->ip_addr, strlen(buff), buff);
+			if (strlen(buff) == 0) {
+				server_disconnect_client(server, client);
 			}
-		
-			node = node->next;
-		}while (node != ((struct list*)(server->client_list))->node);
+			else {
+				client_msg_list_add(client, buff, strlen(buff));
+			}
+			epn++;
+		}
 	}
 
 	return 0;
@@ -127,49 +160,72 @@ int server_epoll_init(struct server *server)
 		printf("Listen epoll create faile \n");
 		return ERR_SERVER_EPOLL_INIT;
 	}
+	server->listen_event_size = 32;
+	server->listen_event_s = malloc(sizeof(struct epoll_event) * server->listen_event_size);
+	if (server->listen_event_s == NULL) {
+		printf("Recv epoll Eevents malloc failed \n");
+		return ERR_SERVER_EPOLL_INIT;
+	}
+	memset(server->listen_event_s, 0, sizeof(struct epoll_event) * server->listen_event_size);
 
 	server->epoll_recv_fd = epoll_create(1024);
 	if (server->epoll_recv_fd < 0) {
 		printf("Recv epoll create faile \n");
 		return ERR_SERVER_EPOLL_INIT;
 	}
+	server->recv_event_size = 1024;
+	server->recv_event_s = malloc(sizeof(struct epoll_event) * server->recv_event_size);
+	if (server->recv_event_s == NULL) {
+		printf("Recv epoll Eevents malloc failed \n");
+		return ERR_SERVER_EPOLL_INIT;
+	}
+	memset(server->recv_event_s, 0, sizeof(struct epoll_event) * server->recv_event_size);
 
 	server->epoll_send_fd = epoll_create(1024);
 	if (server->epoll_send_fd < 0) {
 		printf("Send epoll create faile \n");
 		return ERR_SERVER_EPOLL_INIT;
 	}
+	server->send_event_size = 1024;
+	server->send_event_s = malloc(sizeof(struct epoll_event) * server->send_event_size);
+	if (server->send_event_s == NULL) {
+		printf("Send epoll Eevents malloc failed \n");
+		return ERR_SERVER_EPOLL_INIT;
+	}
+	memset(server->send_event_s, 0, sizeof(struct epoll_event) * server->send_event_size);
 
-	
 	return SERVER_NOLMAL;
 }
 
 
 
-struct node* server_client_node_sort(struct node *node_head, struct node *node)
+struct node* server_client_node_sort(struct node **node_head, struct node *node)
 {
-	struct node *insert = NULL;
+	struct node *insert = *node_head;
 	struct client *client = NULL;
-	struct node *nt = node_head;
 	struct client *ct = NULL;
 
-	if (node->data != NULL) {
-		client = (struct client *)node->data;
-		do {
-			ct = (struct client *)nt->data;
-			if (client->fd < ct->fd) { 
-				insert = nt->prve;
-				break;
-			}
+	if (node == NULL || node->data == NULL)
+		return *node_head;
 
-			nt = nt->next;
-		}while (nt != node_head);
-	}	
+	client = (struct client *)node->data;
+	LIST_NODE_LOOKUP(*node_head, insert) {
+		ct = (struct client *)insert->data;
+		if (client->fd < ct->fd) { 
+			break;
+		}
+	}
 
-	if (insert == NULL)
-		insert = node_head->prve;
+	insert->prve->next = node;
+	node->next = insert;
+	node->prve = insert->prve;
+	insert->prve = node;
+
+	ct = (struct client *)((*node_head)->data);
+	if (client->fd < ct->fd)
+		*node_head = node;
 	
-	return insert;
+	return *node_head;
 }
 
 void server_client_node_free(struct node *node)
@@ -182,9 +238,9 @@ void server_client_node_free(struct node *node)
 	
 	client_msg_list_destory((struct list **)&client->msg_list);
 
-	free(client);
+	_free_(client, sizeof(struct client));
 	
-	free(node);
+	_free_(node, sizeof(struct node));
 }
 
 void server_client_list_free(struct list *list)
@@ -195,7 +251,7 @@ void server_client_list_free(struct list *list)
 	for (node = list->node; node != NULL; node = list->node)
 		list_node_del(list, node);
 
-	free(list);
+	_free_(list, sizeof(struct list));
 }
 
 void  server_client_node_print(struct list *list)
@@ -208,9 +264,8 @@ void  server_client_node_print(struct list *list)
 		return ;
 	}
 
-	do {
+	LIST_NODE_LOOKUP(list->node, node) {
 		printf("    (client info) NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
-		
 		client = (struct client *)node->data;
 		if (client) {
 			printf("    FD                    : %d \n", client->fd);
@@ -218,9 +273,7 @@ void  server_client_node_print(struct list *list)
 			printf("    Last keepalive time   : %d \n", client->last_keepalive_time);	
 			printf("    IP address            : %s \n", client->ip_addr);
 		}
-	
-		node = node->next;
-	}while (node != list->node);
+	}
 
 }
 
@@ -234,14 +287,12 @@ void server_client_list_print(struct list *list_head)
 		return ;
 	}
 
-	do {
+	LIST_LOOKUP(list_head, lt){
 		printf("(client info) LIST ADDRESS (%p) (%d) \n", lt, n++);
 		if (list_head->list_node_print) {
 			((list_node_print)list_head->list_node_print)(lt);
 		}
-		lt = lt->next;
-	}while(lt != list_head);
-
+	}
 }
 
 int server_client_list_init(struct server *server)
@@ -264,18 +315,70 @@ int server_client_list_init(struct server *server)
 	return SERVER_NOLMAL;
 }
 
+
+int server_epoll_events_sort(struct epoll_event **ep, int start, int end)
+{
+	if (start >= end)
+		return 0;
+
+	int key = start;
+	struct epoll_event *key_val = ep[key];
+	int left = start;
+	int right = end;
+
+	while (left < right) {
+		while (left < right && ep[right]->data.fd >= key_val->data.fd) {
+			right--;
+		}
+		ep[key] = ep[right];
+		key = right;
+		
+		while (left < right && ep[left]->data.fd <= key_val->data.fd) {
+			left++;
+		}
+		ep[key] = ep[left];
+		key = left;
+	}
+	
+	ep[key] = key_val;
+
+	server_epoll_events_sort(ep, start, key - 1);
+	server_epoll_events_sort(ep,  key + 1, end);
+
+	return 0;
+}
+
 void *server_recv_client_msg(void *arg)
 {
 	struct server *server = (struct server *)arg;
-	struct epoll_event event_s[1024];
+	struct epoll_event *event_s = server->recv_event_s;
+	int event_size = server->recv_event_size;
 	int nfds = 0;
+	struct epoll_event **ep = NULL;
 	
 	if (server == NULL) 
 		pthread_exit(NULL);
 
+	ep = malloc(sizeof(struct epoll_event *) * event_size);
+	if (ep == NULL)
+		pthread_exit(NULL);
+
 	for (; ;) {
-		nfds = epoll_wait(server->epoll_recv_fd, event_s, sizeof(event_s) / sizeof(struct epoll_event), -1);
-		server_recv_from_client_msg(server, event_s, nfds);
+		nfds = epoll_wait(server->epoll_recv_fd, event_s, event_size, -1);	
+		if (!(nfds > 0))
+			continue;
+		for (int n = 0; n < nfds; n++) {
+			ep[n] = &event_s[n];
+		}
+
+		server_epoll_events_sort(ep, 0, nfds - 1);
+
+		for (int n = 0; n < nfds; n++) {
+			printf("epoll event (%p) fd (%d) \n", ep[n], ep[n]->data.fd);
+			;
+		}
+
+		server_recv_from_client_msg(server, ep, nfds);
 	}
 
 	return NULL;
@@ -328,12 +431,12 @@ void client_msg_node_free(struct node *node)
 	printf("    DELETE (client message) NODE (%p) \n", node);
 
 	if (msg->msg) {
-		free(msg->msg);
+		_free_(msg->msg, msg->len);
 	}
 
-	free(msg);
+	_free_(msg, sizeof(struct message));
 	
-	free(node);
+	_free_(node, sizeof(struct node));
 }
 
 int  client_msg_list_free(struct list *list)
@@ -344,7 +447,7 @@ int  client_msg_list_free(struct list *list)
 	for (node = list->node; node != NULL; node = list->node)
 		list_node_del(list, node);
 
-	free(list);
+	_free_(list, sizeof(struct list));
 
 	return SERVER_NOLMAL;
 }
@@ -359,7 +462,7 @@ void  client_msg_node_print(struct list *list)
 		return ;
 	}
 
-	do {
+	LIST_NODE_LOOKUP(list->node, node) {
 		printf("    (client message) NODE ADDRESS (%p) (%p) NEXT (%p) PRVE (%p) \n", list, node, node->next, node->prve);
 		
 		msg = (struct message *)node->data;
@@ -368,9 +471,7 @@ void  client_msg_node_print(struct list *list)
 			printf("MSG TYPE；%d \n", msg->type);
 			printf("MSG priority: %d \n", msg->priority);
 		}
-	
-		node = node->next;
-	}while (node != list->node);
+	}
 
 }
 
@@ -384,14 +485,12 @@ void client_msg_list_print(struct list *list_head)
 		return ;
 	}
 
-	do {
+	LIST_LOOKUP(list_head, lt){
 		printf("(client message) LIST ADDRESS (%p) (%d) \n", lt, n++);
 		if (list_head->list_node_print) {
 			((list_node_print)list_head->list_node_print)(lt);
 		}
-		lt = lt->next;
-	}while(lt != list_head);
-
+	}
 }
 
 int client_msg_list_init(struct list **list)
@@ -428,12 +527,12 @@ int client_msg_list_add(struct client *client, char *str, int str_len)
 	struct message *msg = NULL;
 	char *msg_str = NULL;
 
-	msg = malloc(sizeof(struct message));
+	msg = _malloc_(sizeof(struct message), "message node");
 	if (msg == NULL)
 		return 0;
 	memset(msg, 0, sizeof(struct message));
 
-	msg_str = malloc(str_len);
+	msg_str = _malloc_(str_len, "message str");
 	if (msg_str == NULL)
 		return 0;
 
@@ -470,7 +569,7 @@ int server_connect_client(struct server *server, int fd)
 	}
 	
 	printf(" -------- Client %s connect(%d) success ------ \n", inet_ntop(AF_INET,&cliaddr.sin_addr, client_addr_p, sizeof(client_addr_p)), connect_fd);
-	struct client *client = malloc(sizeof(struct client));
+	struct client *client = _malloc_(sizeof(struct client), "client node");
 	if (client == NULL) {
 		printf("add client info error \n");
 		return -1;
@@ -490,7 +589,7 @@ int server_connect_client(struct server *server, int fd)
 	
 	memset(&event, 0, sizeof(event));
 	event.data.fd = client->fd;
-	event.events = EPOLLIN | EPOLLET;
+	event.events = EPOLLIN /*| EPOLLET*/;
 
 	if (epoll_ctl(server->epoll_recv_fd, EPOLL_CTL_ADD, client->fd, &event) < 0) {
 		printf("add client epoll ctl error \n");
@@ -566,7 +665,7 @@ int test_server()
 			((list_print)list->list_print)(server->client_list);
 		}
 		for (int k = 0; k < 12; k++) {
-			struct client *client = malloc(sizeof(struct client));
+			struct client *client = _malloc_(sizeof(struct client), "client node");
 			memset(client, 0, sizeof(struct client));
 			client->first_connect_time = time(NULL);
 			client->last_keepalive_time = time(NULL);
@@ -597,7 +696,7 @@ struct server * server_init()
 	
 	printf("============== SERVER INIT ============= \n");
 	
-	server = malloc(sizeof(struct server));
+	server = _malloc_(sizeof(struct server), "server node");
 	if (server == NULL) {
 		printf("Sever init failed \n");
 		goto SERVER_INIT_FAILE;
@@ -671,12 +770,61 @@ int server_exit(struct server *server)
 	if (server->client_list != NULL) {
 		list_destory((struct list**)&server->client_list);
 	}
+
+	if (server->listen_event_s) {
+		_free_(server->listen_event_s, sizeof(struct epoll_event) * server->listen_event_size);
+	}
 	
-	free(server);
+	if (server->recv_event_s) {
+		_free_(server->recv_event_s, sizeof(struct epoll_event) * server->recv_event_size);
+	}
+	
+	if (server->send_event_s) {
+		_free_(server->send_event_s, sizeof(struct epoll_event) * server->send_event_size);
+	}
+	
+	_free_(server, sizeof(struct server));
 	
 	return 0;
 }
 struct server *gserver;
+
+
+int quick_sort(int *a, int left, int right)
+{
+	if (left >= right)
+		return 0;
+
+
+	int key = left;
+	int key_val = a[left];
+
+	int i = left;
+	int j = right;
+
+	while (i < j) {
+		while (i < j && a[j] >= key_val) {
+			j--;
+		}
+		a[key] = a[j];
+		key = j;
+
+		while (i < j && a[i] <= key_val) {
+			i++;
+		}
+		a[key] = a[i];
+		key = i;
+	}
+
+	a[key] = key_val;
+
+	quick_sort(a, left, key - 1);
+	quick_sort(a, key + 1, right);
+	
+	return 0;
+}
+
+
 void signal_server_exit()
 { 
 	server_exit(gserver);
@@ -684,6 +832,33 @@ void signal_server_exit()
 
 int main(int argc, char *argv[])
 {
+#if 0
+	int *a = NULL;
+
+	a = malloc(sizeof(int) * 40960000) ;
+
+	for (int n = 0; n < 40960000; n++) {
+		a[n] = rand() % 40960000;
+	}
+	#if 0
+	for (int n = 0; n < 4096000; n++) {
+		printf("%d ", a[n]);
+		if ((n % 10) == 0) 
+			printf("\n");
+	}
+	printf("\n");
+	#endif
+	quick_sort(a, 0, 40960000);
+
+	for (int n = 0; n < 40960000; n++) {
+		printf("%d ", a[n]);
+		if ((n % 10) == 0) 
+			printf("\n");
+	}
+	printf("\n");
+
+	return 0;
+#endif
 	signal(SIGPIPE, signal_server_exit);
 
 	struct server *server = NULL;

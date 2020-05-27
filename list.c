@@ -5,11 +5,85 @@
 #include "list.h"
 #include "server.h"
 
+
+
+
+#define MALLOCE_DEBUG 0
+
+#if MALLOCE_DEBUG
+#define MALLOC_P_MAX  2048
+int malloc_total_size = 0;
+void *malloc_p[2][MALLOC_P_MAX] = {0};
+int malloc_n = 0;
+#define NODE_STR "node"
+#define LIST_STR "list"
+#endif
+
+void *_malloc_(int size, const char *des) 
+{
+	void *p = NULL;
+	p = malloc(size);
+
+#if MALLOCE_DEBUG
+	
+	for (int n = 0; n < MALLOC_P_MAX; n++) {	
+		if (malloc_p[0][n] == NULL) {
+			malloc_p[0][n] = (void *)p;
+			malloc_p[1][n] = (void *)des;
+			malloc_n++;
+			malloc_total_size += size;
+			break;			
+		}
+	}
+
+	printf("MALLOC NEW ADDR (%p) (%s) (%d)\n", p, des, size);
+	malloc_print();
+#endif
+
+	return p;
+};
+
+void *_free_(void *p, int size) 
+{
+
+#if MALLOCE_DEBUG
+	for (int n = 0; n < MALLOC_P_MAX; n++) {
+		if (malloc_p[0][n] == p) {
+			malloc_p[0][n] = NULL;
+			malloc_p[1][n] = NULL;
+			malloc_n--;
+			malloc_total_size -= size;
+			break;
+		}
+	}
+	printf("FREE ADDR (%p) (%d)\n", p, size);
+	malloc_print();
+#endif
+
+	free(p);
+	
+	return NULL;
+};
+
+
+void malloc_print()
+{
+#if MALLOCE_DEBUG
+
+	int mn = 0;
+
+	for (int n = 0; n < MALLOC_P_MAX; n++) {
+		if (malloc_p[0][n]) {
+			printf("(%d)MALLOC ADDR (%p) des (%s) \n", mn++, malloc_p[0][n], (char *)(malloc_p[1][n] == NULL ? "NULL" : malloc_p[1][n]));
+		}
+	}
+	printf("total malloc num (%d) size (%d) \n", malloc_n, malloc_total_size);
+#endif
+}
+
 int list_node_add(struct list *list, struct node *node)
 {
 	struct node *nt = list->node;
-	struct node *insert = NULL;
-
 
 	if (list->node == NULL) {
 		list->node = node;
@@ -24,18 +98,17 @@ int list_node_add(struct list *list, struct node *node)
 	}
 
 	if (list->node_sort) {
-		insert = ((node_sort)list->node_sort)(list->node, node);
+		((node_sort)list->node_sort)(&list->node, node);
 	} 
 	else {
-		insert = list->node->prve;
+		list->node->prve->next = node;
+		node->prve = list->node->prve;
+		node->next = list->node;
+		list->node->prve = node;
 	}
-
-	node->next = insert->next;
-	node->prve = insert;
-	insert->next->prve = node;
-	insert->next = node;
+	
 	list->node_num ++;
-
+	
 	if (list->list_node_print) {
 		((list_node_print)list->list_node_print)(list);
 	}
@@ -134,7 +207,7 @@ int list_destory(struct list **list_head)
 
 struct node *new_node(void *data)
 {
-	struct node* node = malloc(sizeof(struct node));
+	struct node* node = _malloc_(sizeof(struct node), "list");
 	if (node == NULL) {
 		printf("new node failed \n");
 	}
@@ -151,7 +224,7 @@ struct node *new_node(void *data)
 
 struct list* new_list()
 {
-	struct list* list = malloc(sizeof(struct list));
+	struct list* list = _malloc_(sizeof(struct list), "node");
 	if (list == NULL) {
 		printf("new list failed \n");
 	}
