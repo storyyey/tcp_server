@@ -1,0 +1,35 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icon/copy.png</file>
+        <file>icon/logo.png</file>
+        <file>icon/search.png</file>
+        <file>icon/set.png</file>
+        <file>icon/upgrade.png</file>
+        <file>icon/remark.png</file>
+        <file>icon/refresh.png</file>
+        <file>icon/export.png</file>
+        <file>icon/run.png</file>
+        <file>icon/stop.png</file>
+        <file>icon/excel.png</file>
+        <file>icon/diricon.png</file>
+        <file>icon/notify.png</file>
+        <file>icon/import.png</file>
+        <file>icon/uptab.png</file>
+        <file>icon/settab.png</file>
+        <file>icon/reboot.png</file>
+        <file>icon/network.png</file>
+        <file>icon/down.png</file>
+        <file>icon/up.png</file>
+        <file>icon/cancel.png</file>
+        <file>icon/confirm.png</file>
+        <file>icon/networkset.png</file>
+        <file>icon/more.png</file>
+        <file>icon/device.png</file>
+        <file>icon/clear.png</file>
+        <file>icon/offline.png</file>
+        <file>icon/online.png</file>
+        <file>icon/sandclock.png</file>
+        <file>icon/add.png</file>
+        <file>icon/del.png</file>
+    </qresource>
+</RCC>

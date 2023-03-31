@@ -1,0 +1,17 @@
+{"data":[
+{"feature": "Xiaomi", "companyName": "小米"},
+{"feature": "Huawei", "companyName": "华为"},
+{"feature": "Apple", "companyName": "苹果"},
+{"feature": "Samsung", "companyName": "三星"},
+{"feature": "Cisco", "companyName": "思科"},
+{"feature": "Hikvision", "companyName": "海康威视"},
+{"feature": "Motorola", "companyName": "摩托罗拉"},
+{"feature": "Nokia", "companyName": "诺基亚"},
+{"feature": "New H3c", "companyName": "新华三"},
+{"feature": "TP-Link", "companyName": "普联"},
+{"feature": "Zhejiang Dahua", "companyName": "浙江大华"},
+{"feature": "Intel", "companyName": "英特尔"},
+{"feature": "Dell", "companyName": "戴尔"},
+{"feature": "Fiberhome", "companyName": "烽火通信"},
+{"feature": "zte Corp", "companyName": "中兴通讯"}
+]}
